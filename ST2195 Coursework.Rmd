@@ -1,0 +1,425 @@
+---
+title: "ST2195 Coursework"
+author: "Lacsado Shaniah Santiago"
+date: "2026-04-03"
+output:
+  html_document: default
+  pdf_document: default
+---
+# ST2195 Coursework Project
+
+## Setting Up Environment
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(RSQLite)
+library(dplyr)
+```
+
+### Random Generator
+```{r}
+set.seed(42)
+```
+
+## 1. Random Walk Metropolis
+### Probability Density Function 
+Defining the probability density function
+```{r}
+f <- function(x) {
+  1/2*exp(-abs(x))
+}
+```
+
+### Metropolis-Hastings Function
+First create an empty numeric vector of the size N+1, which includes x0.
+Then, initialize the first index with initial value.
+Create a loop to generate x* from the normal distribution with mean x and standard deviation s, and a random number u from uniform distribution between 0 and 1.
+Then, set x[i] if u < r, else x[i] = x[i].
+```{r}
+metropolisHasting <- function(N,s,x0) {
+  x <- numeric(N+1)
+  x[1] <- x0
+  
+  for (i in 2:N+1){
+    xStar <- rnorm(n=1, mean=x[i-1], sd=s)
+    #Formula: r = f(x*)/f(x[i-1])
+    logr <- log(f(xStar)) - log(f(x[i-1]))
+    
+    u <- runif(1)
+    
+    if(log(u)<logr){
+      x[i] <- xStar
+    } else {
+      x[i] < x[i-1]
+    }
+  }
+  return(x)
+}
+```
+
+### Setting Up Parameters
+Initializing variables such as N is the number of iterations, s is the standard deviation, and x0 is the initial value.
+```{r}
+N <- 10000
+s <- 1
+x0 <- 0
+```
+
+### (a) Run Random Walk Metropolis Algorithm
+```{r}
+samples <- metropolisHasting(N,s,x0)
+
+print(paste0("Mean: ",mean(samples)))
+print(paste0("S.D.: ",sd(samples)))
+```
+### (a) Historgram and Kernel Density Plot (KDE)
+First, transform the samples into data frames for ggplot to able to read.
+Then, initialize the plot.
+Creating an histogram with blue bars, KDE with orange line, and an overlay of graph of f(x) with a black line. With readable titles and labels of the graphs
+```{r}
+samplesDF <- data.frame(samples)
+
+ggplot(samplesDF, aes(x=samples))+
+  geom_histogram(aes(y=after_stat(density)), color="blue", fill="blue", alpha=0.6) + 
+  geom_density(color="orange") +
+  stat_function(fun=f, color="black") +
+  labs(title="Histogram(Blue) and KDE(Orange) of f(x)", x="x", y="Density")
+```
+### (a) Report
+```{r}
+sampleMean <- mean(samples)
+sampleSD <- sd(samples)
+
+cat("Monte Carlo Estimates based on N =", N, "samples:\n")
+cat("--------------------------------------------------\n")
+cat("Sample Mean              :", round(sampleMean, 5), "\n")
+cat("Sample Standard Deviation:", round(sampleSD, 5), "\n")
+```
+As seen above, the sample mean is -0.00297 and the sample standard deviation is 0.82218.
+
+### R Hat Function
+First, generate the dispersed initial values for J chains.
+Second, initialize vectors to store the mJ, mean and vJ, variance of each chain.
+Creating an iteration to calculate the sample mean and variance of all j.
+Then, compute overall variance, w, sample mean, m, and between sample variance, b.
+Lastly, compute r hat value
+```{r}
+rHat <- function(N,s,J){
+  x0 <- rnorm(J, mean=0, sd=s)
+  
+  mJ <- numeric(J)
+  vJ <- numeric(J)
+  
+  for (j in 1:J){
+    chainJ <- metropolisHasting(N, s, x0[j])
+    
+    mJ[j] <- mean(chainJ)
+    
+    vJ[j] <- mean((chainJ-mJ[j])^2)
+  }
+  
+  W <- mean(vJ)
+  M <- mean(mJ)
+  
+  B <- mean((mJ - M)^2)
+  rHat <- sqrt((B+W)/W)
+  
+  return(rHat)
+}
+```
+
+### Setting Up Parameters for R Hat
+Intializing the given values for the algorithm.
+```{r}
+N_r <- 2000
+s_r <- 0.001
+J <- 4
+```
+
+### (b) Calculate R Hat for Random Walk Metropolis Algorithm
+```{r}
+rHat_Value <- rHat(N_r,s_r,J)
+print(paste0("R Hat: ", rHat_Value))
+```
+The R Hat Value is 1.38547.
+
+### Generate s values
+```{r}
+s_grid <- seq(0.001, 1, length.out=50)
+rHatvalues <- numeric(length(s_grid))
+
+for (k in 1:length(s_grid)) {
+  rHatvalues[k] <- rHat(N_r,s_grid[k],J)
+}
+```
+
+### (b) Plot
+Creating a line plot of R Hat(blue)and a threshold indicator(red-dotted).
+```{r}
+plotDF <- data.frame(
+  StepSize = s_grid,
+  rHat = rHatvalues)
+
+ggplot(plotDF, aes(x=StepSize, y=rHat)) +
+  geom_line(color="blue", linewidth=1) +
+  geom_hline(aes(yintercept=1.05, linetype="1.05 Threshold"), 
+             color="red", linewidth=1) +
+  scale_linetype_manual(name = "Legend", values = "dashed") +
+  labs(title="R Hat vs s Values",
+       x = "s Values",
+       y = "R Hat")
+
+```
+## 2. 2009 ASA Statistical Computing and Graphics Data Expo Analysis
+
+### Create Airline Database
+Create airline2db database and establish a connection to be able to execute the code.
+
+#### Remove Existing Database (Use Only at Start)
+```{r}
+if(file.exists("airline.db"))
+  file.remove("airline.db")
+```
+
+#### Create and Set Connection to Database
+Establishing a connection with airlinedb database.
+```{r}
+conn <- dbConnect(RSQLite::SQLite(), "airline.db")
+```
+
+#### Initialize Database Information [Run Once]
+Upload Airport, Carrier, Plane and OnTime(2004-2008) data from Dataverse folder to airline database.
+
+##### Create Tables Except OnTime Table
+Read Airport, Carrier and Plane CSV files in Dataverse folder in the same working directory and initialize into respective dataframe variables.
+```{r}
+airport <- read.csv("Dataverse/airports.csv", header=TRUE)
+carrier <- read.csv("Dataverse/carriers.csv", header=TRUE)
+plane <- read.csv("Dataverse/plane-data.csv", header=TRUE)
+```
+
+##### Initializing Tables to Database Except OnTime Table
+Create and Write Airport, Carrier, and Plane data to airline database
+```{r}
+dbWriteTable(conn, "Airport", airport)
+dbWriteTable(conn, "Carrier", carrier)
+dbWriteTable(conn, "Plane", plane)
+```
+
+##### Intialize OnTime Table
+For 2004-2008 CSV files, it is stored in ontime folder in Dataverse folder.
+Access the ontime folder and read the csv files and upload onTime data into airline database.
+
+###### Get List of Files in Folder
+Set directory path of ontime folder and retrieve names in the folder.
+```{r}
+ontime_folder <- "Dataverse/ontime"
+ontime_csvs <- list.files(path=ontime_folder)
+
+
+print(ontime_csvs)
+```
+##### Initialize OnTime Table and Upload OnTime Table in Database
+Read 2004-2008 CSV files in ontime folder into program as dataframe.
+Create OnTime Table in airline database using first CSV file.
+Then, the following CSV files data are appended to the OnTime Table in airline database.
+```{r}
+for (i in ontime_csvs) {
+  ontime <- read.csv(paste0("Dataverse/ontime/",i), header=TRUE)
+  if (i== ontime_csvs[1]){
+    dbWriteTable(conn,"OnTime", ontime)
+  } else {
+    dbWriteTable(conn, "OnTime", ontime, append=TRUE)
+  }
+}
+```
+
+##### Check Database Table Exists
+```{r}
+dbReadTable(conn, "Airport")
+dbReadTable(conn, "Carrier")
+dbReadTable(conn, "Plane")
+dbReadTable(conn, "OnTime")
+```
+
+### Retrieve Table Data from Database
+```{r}
+plane_db <- tbl(conn,"Plane")
+ontime_db <- tbl(conn, "OnTime")
+carrier_db <- tbl(conn, "Carrier")
+airport_db <- tbl(conn, "Airport")
+```
+
+### (a) What are the best times and days of the week to minimise delays each year ?
+First, acess ontime table.
+Second, filter out arrival delay is missing.
+Third, create an Hour column, taking the scheduled departure time divide by 100 and return as integer.
+Fourth, filter the rows with valid hours.
+Fifth, group the rows into unique combinations of Year, Day, and Hour.
+Sixth, base on the previous grouping, calculate the average of the arrival delays and save it in the MeanDelay.
+Lastly, collect the results of the query from the database.
+```{r}
+bestTimes <- ontime_db %>%
+  filter(!is.na(ArrDelay)) %>%
+  mutate(Hour=as.integer(CRSDepTime/100)) %>%
+  filter(Hour >=0, Hour <= 23) %>%
+  group_by(Year, DayOfWeek, Hour) %>%
+  summarize(MeanDelay = mean(ArrDelay, na.rm=TRUE), .groups="drop") %>%
+  collect()
+```
+
+#### Function for Plotting Year Graph
+Creating a function to plot the graphs in all the years.
+First, get the list of years used.
+Second, create a grid plot of 2 by 2.
+Third, repeat the plotting of the graphs base on the year.
+Inside the iteration of displaying the graph of each year, the loop runs 7 times to plot the lines for Monday to Sunday.
+Lastly, adding the legend and at the end of the loop reset the plot to 1 by 1.
+```{r}
+bestTimes_graph <- function(bestTimes) {
+  years <- list(2004,2005,2006,2007,2008)
+  
+  par(mfrow=c(2,2))
+  
+  for (y in years) {
+    bestTimesYear <- filter(bestTimes, Year==y)
+    
+    plot(NULL, xlim = c(0,23), ylim=c(min(bestTimesYear$MeanDelay), max(bestTimesYear$MeanDelay)),
+         main = paste0("Year ", y),
+         xlab = "Hour", ylab="Average Delay (Min)")
+    colors <- palette(rainbow(7))
+    for (day in 1:7){
+      dayD <- filter(bestTimesYear, DayOfWeek==day)
+      lines(dayD$Hour, dayD$MeanDelay, col=colors[day], lwd=1)
+    }
+    legend("topleft", legend=c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"),
+           fill=colors, title="Day of Week", cex=0.5)
+  }
+  par(mfrow=c(1,1))
+}
+```
+
+#### Yearly Graphs
+As seen from the graphs below, the best time to fly is early morning around 4am to 10am on any day of the week. More specifically, a Sunday early morning flight around 4am to 6am as it has the least flight delays base as the pink line, representing Sunday, is consistently the lowest curve on the graph across all five years.
+```{r}
+bestTimes_graph(bestTimes)
+```
+
+### (b) Evaluate whether older planes suffer more delays on a year-to-year basis.
+
+#### Retrieve TailNum and Issue Year from Plane DB
+For better reference of the planes database, retrieve the tailnum and the year only.
+Then, rename columns as TailNum and IssueYear respectively.
+Then, convert IssueYear as an integer and filter out those with IssueYear and are over 1950.
+```{r}
+plane_db_b <- plane_db %>%
+  select(tailnum, year) %>%
+  rename(TailNum = tailnum, IssueYear = year) %>%
+  mutate(IssueYear = as.integer(IssueYear)) %>%
+  filter(!is.na(IssueYear), IssueYear > 1950)
+```
+
+#### Query
+First, access the ontime database.
+Second, merge the ontime database with plane database base on tail number to retrieve aircraft's manufacturer.
+Third, calculate Plane's age by subtracting issue year from the flight year.
+Fourth, filter the data to keep only realistic plane ages.
+Fifth, group the data by flight year and plane age.
+Lastly, collect the results of the query from the database.
+```{r}
+planeSuffer <- ontime_db %>%
+  filter(!is.na(ArrDelay), !is.na(TailNum)) %>%
+  inner_join(plane_db_b, by="TailNum") %>%
+  mutate(PlaneAge=Year-IssueYear) %>%
+  filter(PlaneAge>=0, PlaneAge<50) %>%
+  group_by(Year, PlaneAge) %>%
+  summarize(MeanDelay=mean(ArrDelay, na.rm=TRUE), .group="drop") %>%
+  collect()
+```
+
+#### Trend in All Year Graph
+Base on the scatter plot below, while there is a positive correlation between a plane's age and its average delay, the year the flight took place is much stronger driver of delays than the age of the aircraft. Observing the trend line, there were higher average delays in the year 2008 (purple) and 2007(blue) as compared to in year 2004(red) and 2005(orange) regardless of the age of the plane were ranging between 5 years old to 40 years old. 
+```{r}
+colors <- c("red", "orange", "forestgreen", "blue", "purple")
+plot(planeSuffer$PlaneAge, planeSuffer$MeanDelay,
+     col=colors[as.factor(planeSuffer$Year)], pch=16,
+     main="Average Arrival Delay vs Plane Age",
+     xlab="Plane Age", ylab="Average Delay (Min)")
+
+abline(lm(MeanDelay ~ PlaneAge, data=planeSuffer), col="black", lwd=2)
+legend("topright", legend=sort(unique(planeSuffer$Year)), 
+       col=colors, pch=16, title="Year")
+```
+### (c) Fit a logistic regression model for the probability of diverted US flights.
+
+#### Retrieve IATA, Lat, Long from Airplane DB
+For better table reference, retrieve only IATA, Lat, Long from airplane db.
+```{r}
+airplane_db_c <- airport_db %>%
+  select(iata, lat, long)
+```
+
+#### Query to Send to DB
+First, access the ontime database.
+Second, join airport and ontime database base on iata.
+Third, Fourth, and Fifth rename the columns to separate whether the lat and long are from origin or/and dest 
+Sixth, filter out rows with missing diversion data.
+Lastly, retrieve only necessary columns for logistic regression.
+```{r}
+flight_features <- ontime_db %>%
+  inner_join(airplane_db_c, by=c("Origin" = "iata")) %>%
+  rename(OriginLat = lat, OriginLong=long) %>%
+  inner_join(airplane_db_c, by=c("Dest"="iata")) %>%
+  rename(DestLat=lat, DestLong=long) %>%
+  filter(!is.na(Diverted)) %>%
+  select(Year, Month, DayOfWeek, CRSDepTime, CRSArrTime,Distance, OriginLat, OriginLong, DestLat, DestLong, Diverted)
+```
+
+
+Collect data into R, organize the data by years and take 30% random sample, and then return it to a standard, un-group dataframe to be used for logistic regression.
+```{r}
+features <- flight_features %>%
+  collect() %>%
+  group_by(Year) %>%
+  slice_sample(prop=0.3) %>% 
+  ungroup()
+```
+
+#### Logistic Regression
+Subset data for the year.
+Then, fit the model into a logistic regression.
+Afterwards, extract the coefficients without the intercept and combine results into a data frame for plotting.
+```{r}
+yearsModel <- unique(features$Year)
+model_results <- list()
+
+for (y in yearsModel) {
+  yearData <- filter(features, Year == y)
+  
+  model <- glm(Diverted ~ Month + DayOfWeek + CRSDepTime + CRSArrTime + Distance + OriginLat + OriginLong + DestLat +
+                 + DestLong, data=yearData, family=binomial())
+  
+  coeffs <- coef(model)[-1]
+  model_results[[as.character((y))]] <- coeffs
+}
+
+coeffsDF <- bind_rows(model_results, .id="Year")
+```
+
+#### Logistic Regression Graph
+The graph shows the estimated coefficients of Distance feature predicting flight diversions from 2004 to 2008. The Distance displays consistency in maintaining positive relationship with diversions across all years. However, its impact is not static. The Distance influence on the model grew steadily to a peak in 2006 before a sharp decline through 2008, where its predictive effect is weakest.
+```{r}
+plot(coeffsDF$Year, coeffsDF$Distance, type="b", pch=19, col="blue",
+     main="Logistic Regression Coefficient Over Time",
+     xlab="Year", ylab="Coefficient Estimate")
+
+```
+From Logistic Regression Coefficient Over Time graph, there was a steady increase from 2004, peaked in 2006, and then sharply declined through 2007, hitting the lowest point in 2008. Additionally, there is a positive relationship as positive coefficient are above zero, indicating specific features increases as the years go by.
+
+### *** Disconnect Database
+```{r}
+dbDisconnect(conn)
+```
